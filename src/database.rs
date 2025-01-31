@@ -36,6 +36,7 @@ impl Database {
     }
 }
 
+
 #[pymodule]
 fn rust_sqlite_wrapper(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Database>()?;
