@@ -3,11 +3,13 @@ use std::sync::{Arc, Mutex};
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use rusqlite::Connection;
 
+// https://doc.rust-lang.org/stable/book/
+
 // We create the database class
 #[pyclass]
 struct Database {
-    conn: Arc<Mutex<Connection>>, // Connection is async, it cannot be safely shared between Python threads.
-                                  // That's why we use Arc<Mutex<Connection>> to enforce sync
+    connection: Arc<Mutex<Connection>>, // Connection is async, it cannot be safely shared between Python threads.
+                                        // That's why we use Arc<Mutex<Connection>> to enforce sync
 }
 
 #[pymethods]
@@ -22,9 +24,9 @@ impl Database {
             None => "database.sqlite",
         };
 
-        // Checking file extension
         const ALLOWED_EXTENSIONS: [&str; 3] = [".sqlite", ".db", ".sql"];
 
+        // If db_path does not end by one of the allowed extensions
         if !ALLOWED_EXTENSIONS
             .iter()
             .any(|ext| db_path.to_lowercase().ends_with(ext))
@@ -38,17 +40,30 @@ impl Database {
 
         // If for some reason we cannot open database, I map the SQLite
         // error into a PyRuntimeError
-        let conn = Connection::open(db_path)
+        let connection = Connection::open(db_path)
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to open DB: {}", e)))?;
 
         Ok(Database {
-            conn: Arc::new(Mutex::new(conn)),
+            connection: Arc::new(Mutex::new(connection)),
         })
     }
 
-    // fn close(&self) {
-    //     println!("Hello Close");
-    // }
+    /// Close the database connection
+    fn close(&mut self) -> PyResult<()> {
+        match Arc::get_mut(&mut self.connection) {
+            Some(mutex) => {
+                drop(mutex.lock().map_err(|_| {
+                    PyRuntimeError::new_err(
+                        "Failed to acquire database lock when closing the connection, another thread might use it.",
+                    )
+                })?);
+                Ok(())
+            }
+            None => Err(PyRuntimeError::new_err(
+                "Failed to close DB: active references exist.",
+            )),
+        }
+    }
 
     // fn execute(&self, query: &str) -> PyResult<()> {
     //     let conn = self
