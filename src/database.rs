@@ -23,7 +23,7 @@ impl Database {
         };
 
         // Checking file extension
-        const ALLOWED_EXTENSIONS: [&str; 2] = [".sqlite", ".db"];
+        const ALLOWED_EXTENSIONS: [&str; 3] = [".sqlite", ".db", ".sql"];
 
         if !ALLOWED_EXTENSIONS
             .iter()
@@ -46,15 +46,19 @@ impl Database {
         })
     }
 
-    fn execute(&self, query: &str) -> PyResult<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to lock database"))?;
-        conn.execute(query, [])
-            .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {}", e)))?;
-        Ok(())
-    }
+    // fn close(&self) {
+    //     println!("Hello Close");
+    // }
+
+    // fn execute(&self, query: &str) -> PyResult<()> {
+    //     let conn = self
+    //         .conn
+    //         .lock()
+    //         .map_err(|_| PyRuntimeError::new_err("Failed to lock database"))?;
+    //     conn.execute(query, [])
+    //         .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {}", e)))?;
+    //     Ok(())
+    // }
 }
 
 #[pymodule]

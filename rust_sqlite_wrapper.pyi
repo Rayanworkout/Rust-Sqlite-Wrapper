@@ -1,4 +1,3 @@
-# sqlite_wrapper.pyi
 
 class Database:
     """
@@ -11,12 +10,19 @@ class Database:
 
         Args:
             db_path (str): The path to the SQLite database file.
+            It should end with one of these extensions:
+            `.sqlite` `.sql` `.db`
 
         Returns:
             Database: An instance of the Database class.
         """
         ...
 
+
+    def create_table(self, table_name: str, column_names: list[str]):
+        ...
+
+    
     def execute(self, query: str) -> None:
         """
         Execute an SQL query on the database.
