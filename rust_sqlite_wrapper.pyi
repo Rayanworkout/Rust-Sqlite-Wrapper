@@ -2,7 +2,7 @@
 
 class Database:
     """
-    A wrapper around an SQLite database connection.
+    A small wrapper around an SQLite database connection to perform basic operations.
     """
 
     def __new__(cls, db_path: str) -> "Database":
