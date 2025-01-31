@@ -6,7 +6,7 @@ use rusqlite::Connection;
 // We create the database class
 #[pyclass]
 struct Database {
-    conn: Arc<Mutex<Connection>>, // Connection async, it cannot be safely shared between Python threads.
+    conn: Arc<Mutex<Connection>>, // Connection is async, it cannot be safely shared between Python threads.
                                   // That's why we use Arc<Mutex<Connection>> to enforce sync
 }
 
