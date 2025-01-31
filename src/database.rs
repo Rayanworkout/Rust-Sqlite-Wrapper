@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use rusqlite::Connection;
@@ -63,6 +66,31 @@ impl Database {
                 "Failed to close DB: active references exist.",
             )),
         }
+    }
+
+    fn create_table(&self, table_name: String, values: HashMap<String, String>) -> PyResult<()> {
+        let conn = &self.connection.lock().map_err(|_| {
+            PyRuntimeError::new_err("Failed to acquire database lock, another thread might use it.")
+        })?;
+
+        let table_columns = values
+            .iter()
+            .map(|(col_name, col_type)| format!("{} {}", col_name, col_type))
+            .collect::<Vec<_>>()
+            .join(",\n  ");
+
+        let sql = format!(
+            "CREATE TABLE IF NOT EXISTS {}
+                (id INTEGER PRIMARY KEY AUTOINCREMENT, {})",
+            table_name, table_columns
+        );
+
+        println!("{}", sql);
+
+        conn.execute(&sql, [])
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?;
+
+        Ok(())
     }
 
     // fn execute(&self, query: &str) -> PyResult<()> {
