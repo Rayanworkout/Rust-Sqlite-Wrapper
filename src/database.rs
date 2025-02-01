@@ -1,12 +1,10 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
-use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
 use rusqlite::Connection;
 
 // https://doc.rust-lang.org/stable/book/
+// https://pyo3.rs/v0.23.4/types.html
 
 // We create the database class
 #[pyclass]
@@ -68,28 +66,38 @@ impl Database {
         }
     }
 
-    fn create_table(&self, table_name: String, values: HashMap<String, String>) -> PyResult<()> {
+    fn create_table<'py>(&self, table_name: String, values: &Bound<'py, PyDict>) -> PyResult<()> {
         let conn = &self.connection.lock().map_err(|_| {
             PyRuntimeError::new_err("Failed to acquire database lock, another thread might use it.")
         })?;
 
-        let table_columns = values
-            .iter()
-            .map(|(col_name, col_type)| format!("{} {}", col_name, col_type))
-            .collect::<Vec<_>>()
-            .join(",\n  ");
+        let mut column_definitions: Vec<String> = Vec::new();
 
-        let sql = format!(
-            "CREATE TABLE IF NOT EXISTS {}
-                (id INTEGER PRIMARY KEY AUTOINCREMENT, {})",
-            table_name, table_columns
-        );
+        for (column_name, column_type) in values {
+            // Ensure column_type is treated as a PyType and get its __name__
+            let column_type_name: String = column_type.getattr("__name__")?.extract()?;
 
-        println!("{}", sql);
+            let sql_type_mapping = match column_type_name.as_str() {
+                "str" => "TEXT",
+                "int" => "INTEGER",
+                "float" => "REAL",
+                "bool" => "BOOLEAN",
+                _ => {
+                    return Err(PyRuntimeError::new_err(
+                        "Wrong type for table creation. Allowed types are valid python builtin types: str, int, float, bool.",
+                    ))
+                }
+            };
+
+            column_definitions.push(format!("{} {}", column_name, sql_type_mapping));
+        }
+
+        let columns = column_definitions.join(", ");
+        let sql = format!("CREATE TABLE {} ({})", table_name, columns);
 
         conn.execute(&sql, [])
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?;
-
+        
         Ok(())
     }
 
