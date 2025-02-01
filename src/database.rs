@@ -66,38 +66,56 @@ impl Database {
         }
     }
 
+    /// Creates a new table in the SQLite database by mapping some Python builtin types
+    /// to SQLite types.
     fn create_table<'py>(&self, table_name: String, values: &Bound<'py, PyDict>) -> PyResult<()> {
         let conn = &self.connection.lock().map_err(|_| {
             PyRuntimeError::new_err("Failed to acquire database lock, another thread might use it.")
         })?;
 
-        let mut column_definitions: Vec<String> = Vec::new();
+        // We create the column definition that will be executed by the database engine.
+        // We iter() through the PyDict sent by Python and check if the column
+        // type is a valid python builtin type and is supported.
+        // A type returns class "type" so we use its attribute "__name__"
+        let column_definitions: Vec<String> = values
+            .iter()
+            .map(|(column_name, column_type)| {
+                let column_type_name: String = column_type
+                    .getattr("__name__")
+                    .map_err(|_| {
+                        PyRuntimeError::new_err(format!(
+                            "Wrong type for the creation of the table \"{}\". Allowed types are valid Python builtin types: str, int, float, and bool.",
+                            table_name
+                        ))
+                    })?
+                    .extract()?;
 
-        for (column_name, column_type) in values {
-            // Ensure column_type is treated as a PyType and get its __name__
-            let column_type_name: String = column_type.getattr("__name__")?.extract()?;
+                let sql_type_mapping = match column_type_name.as_str() {
+                    "str" => "TEXT",
+                    "int" => "INTEGER",
+                    "float" => "REAL",
+                    "bool" => "BOOLEAN",
+                    _ => {
+                        return Err(PyRuntimeError::new_err(format!(
+                            "Wrong type for the creation of the table \"{}\". Allowed types are valid Python builtin types: str, int, float, and bool.",
+                            table_name
+                        )));
+                    }
+                };
 
-            let sql_type_mapping = match column_type_name.as_str() {
-                "str" => "TEXT",
-                "int" => "INTEGER",
-                "float" => "REAL",
-                "bool" => "BOOLEAN",
-                _ => {
-                    return Err(PyRuntimeError::new_err(
-                        "Wrong type for table creation. Allowed types are valid python builtin types: str, int, float, bool.",
-                    ))
-                }
-            };
-
-            column_definitions.push(format!("{} {}", column_name, sql_type_mapping));
-        }
+                // Return the formatted column definition
+                Ok(format!("{} {}", column_name, sql_type_mapping))
+            })
+            // After generating the string we collect it in the vector
+            .collect::<PyResult<Vec<String>>>()?;
 
         let columns = column_definitions.join(", ");
-        let sql = format!("CREATE TABLE {} ({})", table_name, columns);
-
+        let sql = format!("CREATE TABLE IF NOT EXISTS {} ({})", table_name, columns);
+        
+        // Finally we execute the query to create the table if it doesn't exist.
         conn.execute(&sql, [])
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?;
-        
+
         Ok(())
     }
 
