@@ -68,16 +68,18 @@ impl Database {
 
     /// Creates a new table in the SQLite database by mapping some Python builtin types
     /// to SQLite types.
-    fn create_table<'py>(&self, table_name: String, values: &Bound<'py, PyDict>) -> PyResult<()> {
-        let conn = &self.connection.lock().map_err(|_| {
-            PyRuntimeError::new_err("Failed to acquire database lock, another thread might use it.")
-        })?;
-
+    fn create_table<'py>(
+        &self,
+        table_name: String,
+        dict_columns: &Bound<'py, PyDict>,
+    ) -> PyResult<()> {
         // We create the column definition that will be executed by the database engine.
         // We iter() through the PyDict sent by Python and check if the column
         // type is a valid python builtin type and is supported.
         // A type returns class "type" so we use its attribute "__name__"
-        let column_definitions: Vec<String> = values
+
+        let table_name_lowercase = table_name.to_lowercase();
+        let column_definitions: Vec<String> = dict_columns
             .iter()
             .map(|(column_name, column_type)| {
                 let column_type_name: String = column_type
@@ -110,24 +112,47 @@ impl Database {
             .collect::<PyResult<Vec<String>>>()?;
 
         let columns = column_definitions.join(", ");
-        let sql = format!("CREATE TABLE IF NOT EXISTS {} ({})", table_name, columns);
-        
+        let sql = format!(
+            "CREATE TABLE IF NOT EXISTS {} ({})",
+            table_name_lowercase, columns
+        );
+
         // Finally we execute the query to create the table if it doesn't exist.
-        conn.execute(&sql, [])
+        let _exec = &self
+            .connection
+            .lock()
+            .map_err(|_| {
+                PyRuntimeError::new_err(
+                    "Failed to acquire database lock, another thread might use it.",
+                )
+            })?
+            .execute(&sql, [])
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?;
 
         Ok(())
     }
 
-    // fn execute(&self, query: &str) -> PyResult<()> {
-    //     let conn = self
-    //         .conn
-    //         .lock()
-    //         .map_err(|_| PyRuntimeError::new_err("Failed to lock database"))?;
-    //     conn.execute(query, [])
-    //         .map_err(|e| PyRuntimeError::new_err(format!("Query failed: {}", e)))?;
+    /// Insert a record in a specific table
+    // fn insert<'py>(&self, table_name: String, value: &Bound<'py, PyAny>) -> PyResult<()> {
+    //     let query = format!("INSERT INTO {} VALUES {}", table_name, value)
+    //     &self.execute(query);
     //     Ok(())
     // }
+
+    fn execute(&self, query: &str) -> PyResult<()> {
+        let _exec = &self
+            .connection
+            .lock()
+            .map_err(|_| {
+                PyRuntimeError::new_err(
+                    "Failed to acquire database lock, another thread might use it.",
+                )
+            })?
+            .execute(query, [])
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)));
+
+        Ok(())
+    }
 }
 
 #[pymodule]

@@ -22,13 +22,13 @@ class Database:
         ...
 
 
-    def create_table(self, table_name: str, values: Dict[str, type]) -> None:
+    def create_table(self, table_name: str, dict_columns: Dict[str, type]) -> None:
         """
         Creates a new table in the SQLite database.
 
         Args:
             table_name (str): The name of the table to be created.
-            values (Dict[str, type]): A dictionary where keys are column names 
+            dict_columns (Dict[str, type]): A dictionary where keys are column names 
                 and values are Python types (str, int, float, bool) representing the column types.
 
         Raises:

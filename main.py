@@ -5,5 +5,8 @@ db = Database()
 db.create_table("users4", {
     "name": str,
     "age": int,
-    "new": "bool"
+    "new": bool
 })
+
+# Closing the database connection is a good practice
+db.close()
