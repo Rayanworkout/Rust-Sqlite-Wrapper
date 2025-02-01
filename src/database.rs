@@ -1,7 +1,11 @@
 use std::sync::{Arc, Mutex};
 
-use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
-use rusqlite::Connection;
+use pyo3::{
+    exceptions::PyRuntimeError,
+    prelude::*,
+    types::{PyDict, PyList, PyTuple},
+};
+use rusqlite::{params_from_iter, Connection, ToSql};
 
 // https://doc.rust-lang.org/stable/book/
 // https://pyo3.rs/v0.23.4/types.html
@@ -139,7 +143,36 @@ impl Database {
     //     Ok(())
     // }
 
-    fn execute(&self, query: &str) -> PyResult<()> {
+    fn execute<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<()> {
+        let params: Vec<Bound<'_, PyAny>> = match params.get_type().name()?.to_str()? {
+            "list" => params.downcast::<PyList>()?.iter().collect::<Vec<_>>(),
+            "tuple" => params.downcast::<PyTuple>()?.iter().collect::<Vec<_>>(),
+            _ => {
+                return Err(PyRuntimeError::new_err(
+                    "Unsupported parameter type. Expected a list or tuple.",
+                ));
+            }
+        };
+
+        let sql_params: Vec<Box<dyn ToSql>> = params
+            .iter()
+            .map(|item| {
+                if let Ok(val) = item.extract::<i64>() {
+                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert integer
+                } else if let Ok(val) = item.extract::<f64>() {
+                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert float
+                } else if let Ok(val) = item.extract::<String>() {
+                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert string
+                } else if let Ok(val) = item.extract::<bool>() {
+                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert boolean
+                } else {
+                    Err(PyRuntimeError::new_err(
+                        "Unsupported parameter type in query.",
+                    ))
+                }
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+
         let _exec = &self
             .connection
             .lock()
@@ -148,8 +181,8 @@ impl Database {
                     "Failed to acquire database lock, another thread might use it.",
                 )
             })?
-            .execute(query, [])
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)));
+            .execute(query, params_from_iter(sql_params.iter()))
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?;
 
         Ok(())
     }

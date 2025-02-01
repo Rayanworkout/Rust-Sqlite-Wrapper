@@ -39,12 +39,13 @@ class Database:
         ...
 
     
-    def execute(self, query: str) -> None:
+    def execute(self, query: str, params: tuple | list) -> None:
         """
         Execute an SQL query on the database.
 
         Args:
             query (str): The SQL query to execute.
+            params (tuple | list): The parameters to pass to the query.
 
         Raises:
             RuntimeError: If the query execution fails.
