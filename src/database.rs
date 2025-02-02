@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use pyo3::{
     exceptions::PyRuntimeError,
     prelude::*,
-    types::{PyDict, PyList, PyTuple},
+    types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple},
 };
 use rusqlite::{params_from_iter, Connection, ToSql};
 
@@ -143,7 +143,30 @@ impl Database {
     //     Ok(())
     // }
 
+    /// Executes a SQL query with the given parameters.
+    ///
+    /// # Arguments
+    /// * `query` - The SQL query string to execute
+    /// * `params` - A Python list or tuple containing query parameters
+    ///
+    /// # Returns
+    /// * `PyResult<()>` - Ok(()) on successful execution, or Err with a PyRuntimeError
+    ///
+    /// # Supported Parameter Types
+    /// * Integer (i64)
+    /// * Float (f64)
+    /// * String
+    /// * Boolean
+    ///
+    /// # Examples
+    /// ```python
+    /// db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["John", 30])
+    /// db.execute("UPDATE users SET active = ? WHERE id = ?", (True, 1))
+    /// ```
     fn execute<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<()> {
+        // TODO Write doc + return execute result (usize)
+
+        // Convert Python list/tuple to Vec of PyAny
         let params: Vec<Bound<'_, PyAny>> = match params.get_type().name()?.to_str()? {
             "list" => params.downcast::<PyList>()?.iter().collect::<Vec<_>>(),
             "tuple" => params.downcast::<PyTuple>()?.iter().collect::<Vec<_>>(),
@@ -154,27 +177,46 @@ impl Database {
             }
         };
 
+        // Convert all parameters to SQL-compatible types
+        // Box<T> is a smart pointer that puts data on the heap rather than the stack.
+        //We need it here because:
+
+        // - Different parameter types have different sizes (String vs i64)
+        // - We need to store them in a Vec together
+
+        // dyn is used for dynamic dispatch with traits. In our case:
+
+        // ToSql is a trait implemented by various types (String, i64, etc.)
+        // dyn ToSql means "any type that implements ToSql"
+        // We need Box<dyn ToSql> to store different types that implement ToSql in our Vec
         let sql_params: Vec<Box<dyn ToSql>> = params
-            .iter()
-            .map(|item| {
-                if let Ok(val) = item.extract::<i64>() {
-                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert integer
-                } else if let Ok(val) = item.extract::<f64>() {
-                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert float
-                } else if let Ok(val) = item.extract::<String>() {
-                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert string
-                } else if let Ok(val) = item.extract::<bool>() {
-                    Ok(Box::new(val) as Box<dyn ToSql>) // Convert boolean
+            .iter() // Iterate over Python parameters
+            .map(|item| -> PyResult<Box<dyn ToSql>> {
+                // For each parameter, try to convert it to a SQL type:
+                if item.is_instance_of::<PyInt>() {
+                    // Python int -> Rust i64 -> Box<dyn ToSql>
+                    Ok(Box::new(item.extract::<i64>()?))
+                } else if item.is_instance_of::<PyFloat>() {
+                    // Python float -> Rust f64 -> Box<dyn ToSql>
+                    Ok(Box::new(item.extract::<f64>()?))
+                } else if item.is_instance_of::<PyString>() {
+                    // Python str -> Rust String -> Box<dyn ToSql>
+                    Ok(Box::new(item.extract::<String>()?))
+                } else if item.is_instance_of::<PyBool>() {
+                    // Python bool -> Rust bool -> Box<dyn ToSql>
+                    Ok(Box::new(item.extract::<bool>()?))
                 } else {
+                    // Unsupported type -> PyErr
                     Err(PyRuntimeError::new_err(
                         "Unsupported parameter type in query.",
                     ))
                 }
             })
-            .collect::<PyResult<Vec<_>>>()?;
+            .collect::<PyResult<Vec<_>>>()?; // Collect into Result<Vec<Box<dyn ToSql>>>
+                                             // Final ? operator unwraps the PyResult
 
-        let _exec = &self
-            .connection
+        // Execute the query with thread-safe connection handling
+        self.connection
             .lock()
             .map_err(|_| {
                 PyRuntimeError::new_err(
