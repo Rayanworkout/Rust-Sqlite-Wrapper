@@ -76,7 +76,7 @@ impl Database {
         &self,
         table_name: String,
         dict_columns: &Bound<'py, PyDict>,
-    ) -> PyResult<()> {
+    ) -> PyResult<usize> {
         // We create the column definition that will be executed by the database engine.
         // We iter() through the PyDict sent by Python and check if the column
         // type is a valid python builtin type and is supported.
@@ -122,7 +122,7 @@ impl Database {
         );
 
         // Finally we execute the query to create the table if it doesn't exist.
-        let _exec = &self
+        Ok(self
             .connection
             .lock()
             .map_err(|_| {
@@ -131,9 +131,7 @@ impl Database {
                 )
             })?
             .execute(&sql, [])
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?;
-
-        Ok(())
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?)
     }
 
     /// Insert a record in a specific table
@@ -163,8 +161,7 @@ impl Database {
     /// db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["John", 30])
     /// db.execute("UPDATE users SET active = ? WHERE id = ?", (True, 1))
     /// ```
-    fn execute<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<()> {
-        // TODO Write doc + return execute result (usize)
+    fn execute<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<usize> {
 
         // Convert Python list/tuple to Vec of PyAny
         let params: Vec<Bound<'_, PyAny>> = match params.get_type().name()?.to_str()? {
@@ -216,7 +213,9 @@ impl Database {
                                              // Final ? operator unwraps the PyResult
 
         // Execute the query with thread-safe connection handling
-        self.connection
+        // and return the result
+        Ok(self
+            .connection
             .lock()
             .map_err(|_| {
                 PyRuntimeError::new_err(
@@ -224,9 +223,7 @@ impl Database {
                 )
             })?
             .execute(query, params_from_iter(sql_params.iter()))
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?;
-
-        Ok(())
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?)
     }
 }
 

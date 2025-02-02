@@ -22,7 +22,7 @@ class Database:
         ...
 
 
-    def create_table(self, table_name: str, dict_columns: Dict[str, type]) -> None:
+    def create_table(self, table_name: str, dict_columns: Dict[str, type]) -> int:
         """
         Creates a new table in the SQLite database.
 
@@ -35,6 +35,9 @@ class Database:
             RuntimeError: If a column type is not one of the allowed built-in Python types 
                 (str, int, float, bool).
             Exception: If an internal SQLite error occurs.
+
+        Returns:
+            int: The updated rows number
         """
         ...
 
