@@ -53,23 +53,6 @@ impl Database {
         })
     }
 
-    /// Close the database connection
-    fn close(&mut self) -> PyResult<()> {
-        match Arc::get_mut(&mut self.connection) {
-            Some(mutex) => {
-                drop(mutex.lock().map_err(|_| {
-                    PyRuntimeError::new_err(
-                        "Failed to acquire database lock when closing the connection, another thread might use it.",
-                    )
-                })?);
-                Ok(())
-            }
-            None => Err(PyRuntimeError::new_err(
-                "Failed to close DB: active references exist.",
-            )),
-        }
-    }
-
     /// Creates a new table in the SQLite database by mapping some Python builtin types
     /// to SQLite types.
     fn create_table<'py>(
@@ -134,14 +117,8 @@ impl Database {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?)
     }
 
-    /// Insert a record in a specific table
-    // fn insert<'py>(&self, table_name: String, value: &Bound<'py, PyAny>) -> PyResult<()> {
-    //     let query = format!("INSERT INTO {} VALUES {}", table_name, value)
-    //     &self.execute(query);
-    //     Ok(())
-    // }
-
     /// Executes a SQL query with the given parameters.
+    /// Accepts Python arguments
     ///
     /// # Arguments
     /// * `query` - The SQL query string to execute
@@ -161,8 +138,7 @@ impl Database {
     /// db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["John", 30])
     /// db.execute("UPDATE users SET active = ? WHERE id = ?", (True, 1))
     /// ```
-    fn execute<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<usize> {
-
+    fn execute_raw_query<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<usize> {
         // Convert Python list/tuple to Vec of PyAny
         let params: Vec<Bound<'_, PyAny>> = match params.get_type().name()?.to_str()? {
             "list" => params.downcast::<PyList>()?.iter().collect::<Vec<_>>(),
@@ -224,6 +200,59 @@ impl Database {
             })?
             .execute(query, params_from_iter(sql_params.iter()))
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?)
+    }
+
+    fn execute(&self, query: String, values: Vec<String>) -> PyResult<usize> {
+        let values: Vec<&dyn rusqlite::ToSql> =
+            values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+
+        Ok(self
+            .connection
+            .lock()
+            .map_err(|_| {
+                PyRuntimeError::new_err(
+                    "Failed to acquire database lock, another thread might use it.",
+                )
+            })?
+            .execute(&query, params_from_iter(values))
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?)
+    }
+
+    fn insert<'py>(&self, table: String, values: &Bound<'py, PyDict>) -> PyResult<()> {
+        // Extract column names and values from the dictionary
+        let columns: Vec<String> = values
+            .keys()
+            .iter()
+            .map(|k| k.extract::<String>().unwrap())
+            .collect();
+
+        let values_vec: Vec<String> = values
+            .values()
+            .iter()
+            .map(|v| {
+                if let Ok(s) = v.extract::<String>() {
+                    s
+                } else if let Ok(i) = v.extract::<i64>() {
+                    format!("{}", i)
+                } else if let Ok(b) = v.extract::<bool>() {
+                    format!("{}", if b { 1 } else { 0 })
+                } else {
+                    panic!("Unsupported data type")
+                }
+            })
+            .collect();
+
+        let placeholders = vec!["?"; columns.len()].join(", ");
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table,
+            columns.join(", "),
+            placeholders
+        );
+
+        let _ = self.execute(sql, values_vec);
+
+        Ok(())
     }
 }
 

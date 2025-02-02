@@ -42,9 +42,9 @@ class Database:
         ...
 
     
-    def execute(self, query: str, params: tuple | list) -> None:
+    def execute_raw_query(self, query: str, params: tuple | list) -> int:
         """
-        Execute an SQL query on the database.
+        Execute a raw SQL query on the database.
 
         Args:
             query (str): The SQL query to execute.
@@ -52,5 +52,8 @@ class Database:
 
         Raises:
             RuntimeError: If the query execution fails.
+        
+        Returns:
+            int: The number of rows affected by the query.
         """
         ...
