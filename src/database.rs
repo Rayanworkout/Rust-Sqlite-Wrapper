@@ -234,7 +234,11 @@ impl Database {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?)
     }
 
-    fn fetch_all<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<()> {
+    fn fetch_all<'py>(
+        &self,
+        query: &str,
+        params: &Bound<'py, PyAny>,
+    ) -> PyResult<Vec<Vec<String>>> {
         // Convert Python list/tuple to Vec of PyAny
         let params: Vec<Bound<'_, PyAny>> = match params.get_type().name()?.to_str()? {
             "list" => params.downcast::<PyList>()?.iter().collect::<Vec<_>>(),
@@ -298,12 +302,7 @@ impl Database {
             .collect::<Result<Vec<Vec<String>>, _>>()
             .map_err(|e| PyRuntimeError::new_err(format!("Query execution error: {}", e)))?; // Collect Vec<Vec<String>>
 
-        // Convert Vec<Vec<String>> to Vec of tuples
-        let rows_as_tuples: Vec<(Vec<String>,)> = rows.into_iter().map(|row| (row,)).collect();
-
-        println!("{:?}", rows_as_tuples);
-
-        Ok(())
+        Ok(rows)
     }
 
     //// INTERNALS ////

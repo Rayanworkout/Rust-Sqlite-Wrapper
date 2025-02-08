@@ -10,3 +10,5 @@ db.create_table("users", {"name": str, "age": int, "is_underage": bool})
 r = db.fetch_all(
     "SELECT * FROM users", []
 )
+
+print(r)
