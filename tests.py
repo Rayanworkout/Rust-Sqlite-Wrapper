@@ -6,10 +6,16 @@ from rust_sqlite_wrapper import Database
 class TestRustSQLiteWrapper(unittest.TestCase):
 
     # py -m unittest .\tests.py
-    TEST_DB_NAME = "./test_db.sqlite"
+    TEST_DB_NAME = "test_db.sqlite"
 
     def __init__(self, methodName = "runTest"):
         super().__init__(methodName)
+        if os.path.exists(TestRustSQLiteWrapper.TEST_DB_NAME):
+            os.remove(TestRustSQLiteWrapper.TEST_DB_NAME)
+
+    @classmethod
+    def tearDownClass(cls):
+        """Remove the test database after all tests."""
         if os.path.exists(TestRustSQLiteWrapper.TEST_DB_NAME):
             os.remove(TestRustSQLiteWrapper.TEST_DB_NAME)
 
@@ -62,11 +68,12 @@ class TestRustSQLiteWrapper(unittest.TestCase):
         })
         except Exception as e:
             self.fail(f"An error occurred while creating the table: {e}")
-            
+
     def test_table_does_not_exist(self):
         """Test querying a non-existing table."""
         with self.assertRaises(RuntimeError):
             self.db.execute_raw_query("SELECT * FROM non_existing_table", [])
+
 
 if __name__ == '__main__':
     unittest.main()

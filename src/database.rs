@@ -105,16 +105,47 @@ impl Database {
         );
 
         // Finally we execute the query to create the table if it doesn't exist.
-        Ok(self
-            .connection
-            .lock()
-            .map_err(|_| {
-                PyRuntimeError::new_err(
-                    "Failed to acquire database lock, another thread might use it.",
-                )
-            })?
-            .execute(&sql, [])
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create table: {}", e)))?)
+        Ok(self.__execute(sql, None)?)
+    }
+
+    fn insert<'py>(&self, table: String, values: &Bound<'py, PyDict>) -> PyResult<usize> {
+        // Extract column names and values from the dictionary
+        let columns: Vec<String> = values
+            .keys()
+            .iter()
+            .map(|k| k.extract::<String>().unwrap())
+            .collect();
+
+        let values_vec: Vec<String> = values
+            .values()
+            .iter()
+            .map(|v| {
+                if let Ok(s) = v.extract::<String>() {
+                    Ok(s)
+                } else if let Ok(i) = v.extract::<i64>() {
+                    Ok(format!("{}", i))
+                } else if let Ok(f) = v.extract::<f64>() {
+                    Ok(format!("{}", f))
+                } else if let Ok(b) = v.extract::<bool>() {
+                    Ok(format!("{}", if b { 1 } else { 0 }))
+                } else {
+                    Err(PyRuntimeError::new_err(format!(
+                        "Unsupported type for \"{}\". Supported types are: str, int, bool, float.",
+                        v
+                    )))
+                }
+            })
+            .collect::<Result<Vec<String>, PyErr>>()?;
+
+        let placeholders = vec!["?"; columns.len()].join(", ");
+        let sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            table,
+            columns.join(", "),
+            placeholders
+        );
+
+        Ok(self.__execute(sql, Some(values_vec))?)
     }
 
     /// Executes a SQL query with the given parameters.
@@ -140,6 +171,7 @@ impl Database {
     /// ```
     fn execute_raw_query<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<usize> {
         // Convert Python list/tuple to Vec of PyAny
+        // Raise an error if it is neither
         let params: Vec<Bound<'_, PyAny>> = match params.get_type().name()?.to_str()? {
             "list" => params.downcast::<PyList>()?.iter().collect::<Vec<_>>(),
             "tuple" => params.downcast::<PyTuple>()?.iter().collect::<Vec<_>>(),
@@ -202,57 +234,112 @@ impl Database {
             .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?)
     }
 
-    fn execute(&self, query: String, values: Vec<String>) -> PyResult<usize> {
-        let values: Vec<&dyn rusqlite::ToSql> =
-            values.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+    fn fetch_all<'py>(&self, query: &str, params: &Bound<'py, PyAny>) -> PyResult<()> {
+        // Convert Python list/tuple to Vec of PyAny
+        let params: Vec<Bound<'_, PyAny>> = match params.get_type().name()?.to_str()? {
+            "list" => params.downcast::<PyList>()?.iter().collect::<Vec<_>>(),
+            "tuple" => params.downcast::<PyTuple>()?.iter().collect::<Vec<_>>(),
+            _ => {
+                return Err(PyRuntimeError::new_err(
+                    "Unsupported parameter type. Expected a list or tuple.",
+                ));
+            }
+        };
 
-        Ok(self
-            .connection
-            .lock()
-            .map_err(|_| {
-                PyRuntimeError::new_err(
-                    "Failed to acquire database lock, another thread might use it.",
-                )
-            })?
-            .execute(&query, params_from_iter(values))
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?)
-    }
-
-    fn insert<'py>(&self, table: String, values: &Bound<'py, PyDict>) -> PyResult<()> {
-        // Extract column names and values from the dictionary
-        let columns: Vec<String> = values
-            .keys()
+        // Convert parameters to SQL types
+        let sql_params: Vec<Box<dyn ToSql>> = params
             .iter()
-            .map(|k| k.extract::<String>().unwrap())
-            .collect();
-
-        let values_vec: Vec<String> = values
-            .values()
-            .iter()
-            .map(|v| {
-                if let Ok(s) = v.extract::<String>() {
-                    s
-                } else if let Ok(i) = v.extract::<i64>() {
-                    format!("{}", i)
-                } else if let Ok(b) = v.extract::<bool>() {
-                    format!("{}", if b { 1 } else { 0 })
+            .map(|item| -> PyResult<Box<dyn ToSql>> {
+                if item.is_instance_of::<PyInt>() {
+                    Ok(Box::new(item.extract::<i64>()?))
+                } else if item.is_instance_of::<PyFloat>() {
+                    Ok(Box::new(item.extract::<f64>()?))
+                } else if item.is_instance_of::<PyString>() {
+                    Ok(Box::new(item.extract::<String>()?))
+                } else if item.is_instance_of::<PyBool>() {
+                    Ok(Box::new(item.extract::<bool>()?))
                 } else {
-                    panic!("Unsupported data type")
+                    Err(PyRuntimeError::new_err(
+                        "Unsupported parameter type in query.",
+                    ))
                 }
             })
-            .collect();
+            .collect::<PyResult<Vec<_>>>()?;
 
-        let placeholders = vec!["?"; columns.len()].join(", ");
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            table,
-            columns.join(", "),
-            placeholders
-        );
+        let conn = self.connection.lock().map_err(|_| {
+            PyRuntimeError::new_err("Failed to acquire database lock, another thread might use it.")
+        })?;
 
-        let _ = self.execute(sql, values_vec);
+        let mut stmt = conn
+            .prepare(query)
+            .map_err(|e| PyRuntimeError::new_err(format!("Failed to prepare query: {}", e)))?;
+
+        let column_count = stmt.column_count();
+
+        let rows: Vec<Vec<String>> = stmt
+            .query_map(
+                params_from_iter(sql_params.iter().map(|p| p.as_ref())),
+                |row| {
+                    let mut values = Vec::new();
+                    for i in 0..column_count {
+                        let value: rusqlite::types::Value = row.get(i)?;
+                        values.push(match value {
+                            rusqlite::types::Value::Integer(i) => i.to_string(),
+                            rusqlite::types::Value::Real(f) => f.to_string(),
+                            rusqlite::types::Value::Text(ref s) => s.clone(),
+                            rusqlite::types::Value::Blob(ref b) => format!("{:?}", b),
+                            rusqlite::types::Value::Null => "NULL".to_string(),
+                        });
+                    }
+                    Ok(values)
+                },
+            )
+            .map_err(|e| PyRuntimeError::new_err(format!("Query execution error: {}", e)))?
+            .collect::<Result<Vec<Vec<String>>, _>>()
+            .map_err(|e| PyRuntimeError::new_err(format!("Query execution error: {}", e)))?; // Collect Vec<Vec<String>>
+
+        // Convert Vec<Vec<String>> to Vec of tuples
+        let rows_as_tuples: Vec<(Vec<String>,)> = rows.into_iter().map(|row| (row,)).collect();
+
+        println!("{:?}", rows_as_tuples);
 
         Ok(())
+    }
+
+    //// INTERNALS ////
+
+    /// Method to execute queries. Used inside the create_table() and insert() methods
+    #[pyo3(signature = (query, values=None))]
+    fn __execute(&self, query: String, values: Option<Vec<String>>) -> PyResult<usize> {
+        match values {
+            Some(vals) => {
+                let values: Vec<&dyn rusqlite::ToSql> =
+                    vals.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
+
+                Ok(self
+                    .connection
+                    .lock()
+                    .map_err(|_| {
+                        PyRuntimeError::new_err(
+                            "Failed to acquire database lock, another thread might use it.",
+                        )
+                    })?
+                    .execute(&query, params_from_iter(values))
+                    .map_err(|e| {
+                        PyRuntimeError::new_err(format!("Failed to execute query: {}", e))
+                    })?)
+            }
+            None => Ok(self
+                .connection
+                .lock()
+                .map_err(|_| {
+                    PyRuntimeError::new_err(
+                        "Failed to acquire database lock, another thread might use it.",
+                    )
+                })?
+                .execute(&query, [])
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to execute query: {}", e)))?),
+        }
     }
 }
 
